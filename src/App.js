@@ -64,7 +64,8 @@ const ContactsModal = ({ contacts, onSelect, onClose }) => (
 
 // --- MAIN APP ---
 export default function App() {
-  const [mode, setMode] = useState("create");
+  // Mode can now be 'create', 'fetch', or 'reset'
+  const [mode, setMode] = useState("fetch");
   const [walletName, setWalletName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
@@ -83,6 +84,9 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [revealInput, setRevealInput] = useState("");
   const [showSensitive, setShowSensitive] = useState(false);
+  
+  // New state for the mnemonic phrase input during password reset
+  const [mnemonicInput, setMnemonicInput] = useState("");
 
   // Contacts feature state
   const [contacts, setContacts] = useState([]);
@@ -126,19 +130,14 @@ export default function App() {
         const wallet = Wallet.createRandom();
         const payload = { name: walletName, address: wallet.address, privateKey: wallet.privateKey, mnemonic: wallet.mnemonic.phrase, password };
         const res = await fetch(`${API_URL}/api/wallet`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-
-        // START of CHANGE
         if (res.ok) {
           toast.success("Wallet created & saved!");
           setWalletName(""); setPassword(""); setConfirmPw("");
         } else {
-          // This will now handle the "Wallet name already exists" error
           const errorData = await res.json();
           toast.error(errorData.error || "Save failed");
         }
-        // END of CHANGE
-
-      } else {
+      } else { // This is 'fetch' mode
         const res = await fetch(`${API_URL}/api/wallet/${walletName}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
         const data = await res.json();
         if (data.error) {
@@ -156,6 +155,48 @@ export default function App() {
     }
   };
 
+  // ==================================================================
+  // ========= NEW HANDLER FOR PASSWORD RESET =========================
+  // ==================================================================
+  const handlePasswordReset = async () => {
+    if (!walletName.trim() || !mnemonicInput.trim() || !password.trim()) {
+      return toast.error("Please fill all fields.");
+    }
+    if (password !== confirmPw) {
+      return toast.error("New passwords do not match.");
+    }
+    setLoading(true);
+    try {
+      const payload = {
+        name: walletName,
+        mnemonic: mnemonicInput,
+        newPassword: password
+      };
+      const res = await fetch(`${API_URL}/api/wallet/reset-password`, {
+        method: 'PUT',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        // Reset form and switch back to login mode
+        setMode("fetch");
+        setWalletName("");
+        setMnemonicInput("");
+        setPassword("");
+        setConfirmPw("");
+      } else {
+        toast.error(data.error || "Failed to reset password.");
+      }
+    } catch (e) {
+      toast.error("A network error occurred.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logTransaction = async (hash) => {
     try {
       await fetch(`${API_URL}/api/tx/${hash}`, { method: "POST" });
@@ -164,7 +205,7 @@ export default function App() {
     }
   };
 
-  // --- CORRECTED handleSend FUNCTION ---
+  // --- handleSend function remains the same ---
   const handleSend = async () => {
     if (!walletData) return toast.error("Load wallet first.");
     if (!isAddress(recipient)) return toast.error("Invalid recipient address.");
@@ -181,7 +222,6 @@ export default function App() {
         if (sendToken === "BNB") {
             txRequest = { to: recipient, value: parseEther(amount), nonce: nonce };
         } else {
-            // FIX WAS HERE: These definitions were missing.
             const contractAddress = sendToken === "USDT" ? USDT_CONTRACT_ADDRESS : USDC_CONTRACT_ADDRESS;
             const tokenContract = new Contract(contractAddress, ERC20_ABI, wallet);
             const decimals = await tokenContract.decimals();
@@ -232,6 +272,7 @@ export default function App() {
     }
   };
 
+  // --- other functions (handleCancel, fetchHistory, etc.) remain the same ---
   const handleCancel = async (txToCancel) => {
     if (!window.confirm("Are you sure you want to cancel this transaction? This will cost a small gas fee.")) {
         return;
@@ -367,30 +408,92 @@ export default function App() {
     }
   }, [activeTab, walletData, fetchHistory, fetchContacts]);
 
+  // ==================================================================
+  // ========= UPDATED PRE-LOGIN VIEW =================================
+  // ==================================================================
   if (!walletData) {
+    const getTitle = () => {
+      if (mode === 'create') return "Create a New Wallet";
+      if (mode === 'reset') return "Reset Your Password";
+      return "Access Your Wallet";
+    };
+
+    const getButtonText = () => {
+      if (loading) return "Loading...";
+      if (mode === 'create') return "Create & Secure Wallet";
+      if (mode === 'reset') return "Reset Password";
+      return "Access My Wallet";
+    };
+
+    const mainAction = mode === 'reset' ? handlePasswordReset : handleSubmit;
+
     return (
         <div className="app-pre-login">
             <Toaster position="top-center" toastOptions={{ className: 'toast-custom' }}/>
             <div className="login-box">
                 <h1 className="title">🦊 CryptoNest</h1>
-                <p className="subtitle">Your Simple & Secure BSC Wallet</p>
-                <div className="pill-toggle">
-                    <span className={clsx({ active: mode === "create" })} onClick={() => setMode("create")}>Create Wallet</span>
-                    <span className={clsx({ active: mode === "fetch" })} onClick={() => setMode("fetch")}>Access Wallet</span>
-                </div>
+                <p className="subtitle">{getTitle()}</p>
+                
+                {/* Hide the Create/Access toggle when in reset mode */}
+                {mode !== 'reset' && (
+                  <div className="pill-toggle">
+                      <span className={clsx({ active: mode === "create" })} onClick={() => setMode("create")}>Create Wallet</span>
+                      <span className={clsx({ active: mode === "fetch" })} onClick={() => setMode("fetch")}>Access Wallet</span>
+                  </div>
+                )}
+
                 <div className="input-group">
                     <input placeholder="Wallet Name" value={walletName} onChange={(e) => setWalletName(e.target.value)} />
-                    <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
-                    {mode === "create" && (<input type="password" placeholder="Confirm Password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />)}
+
+                    {/* Show Mnemonic field only in reset mode */}
+                    {mode === 'reset' && (
+                      <textarea
+                        className="mnemonic-input"
+                        placeholder="Enter your 12-word Mnemonic Phrase to verify ownership"
+                        value={mnemonicInput}
+                        onChange={(e) => setMnemonicInput(e.target.value)}
+                        rows={3}
+                      />
+                    )}
+
+                    {/* The password input serves different purposes based on the mode */}
+                    <input
+                      type="password"
+                      placeholder={mode === 'reset' ? 'Enter New Password' : 'Password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    
+                    {/* Show confirm password for create and reset modes */}
+                    {(mode === "create" || mode === 'reset') && (
+                      <input
+                        type="password"
+                        placeholder={mode === 'reset' ? 'Confirm New Password' : 'Confirm Password'}
+                        value={confirmPw}
+                        onChange={(e) => setConfirmPw(e.target.value)}
+                      />
+                    )}
                 </div>
-                <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
-                    {loading ? "Loading..." : (mode === "create" ? "Create & Secure Wallet" : "Access My Wallet")}
+
+                <button className="btn btn-primary" onClick={mainAction} disabled={loading}>
+                    {getButtonText()}
                 </button>
+
+                {/* Show different links based on the current mode */}
+                <div className="login-footer-links">
+                  {mode === 'fetch' && (
+                    <a href="#" onClick={(e) => { e.preventDefault(); setMode('reset'); }}>Forgot Password?</a>
+                  )}
+                  {mode === 'reset' && (
+                    <a href="#" onClick={(e) => { e.preventDefault(); setMode('fetch'); }}>Back to Login</a>
+                  )}
+                </div>
             </div>
         </div>
     );
   }
 
+  // --- Logged-in view remains the same ---
   return (
     <div className="app-logged-in">
         <Toaster position="top-center" toastOptions={{ className: 'toast-custom' }}/>
