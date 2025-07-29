@@ -52,6 +52,23 @@ body {
   margin-bottom: 2rem;
 }
 
+/* NEW: Styles for "Forgot Password?" and "Back to Login" links */
+.login-footer-links {
+  margin-top: 1.5rem; /* Add some space above the link */
+}
+
+.login-footer-links a {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.login-footer-links a:hover {
+  text-decoration: underline;
+}
+
+
 /* --- LOGGED-IN LAYOUT --- */
 .app-logged-in {
   display: flex;
@@ -170,6 +187,13 @@ input, select, textarea {
 
 textarea {
   resize: vertical;
+}
+
+/* NEW: Specific style for the mnemonic textarea to use a monospace font */
+textarea.mnemonic-input {
+  font-family: monospace;
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
 .btn {
