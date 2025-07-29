@@ -134,7 +134,7 @@ export default function App() {
           const errorData = await res.json();
           toast.error(errorData.error || "Save failed");
         }
-      } else {
+      } else { // 'fetch' mode
         const res = await fetch(`${API_URL}/api/wallet/${walletName}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
         const data = await res.json();
         if (data.error) {
@@ -177,6 +177,14 @@ export default function App() {
     }
   };
 
+  const logTransaction = async (hash) => {
+    try {
+      await fetch(`${API_URL}/api/tx/${hash}`, { method: "POST" });
+    } catch (e) {
+      console.error("Auto-logging failed for tx:", hash, e);
+    }
+  };
+
   const handleSend = async () => {
     if (!walletData) return toast.error("Load wallet first.");
     if (!isAddress(recipient)) return toast.error("Invalid recipient address.");
@@ -184,10 +192,191 @@ export default function App() {
 
     setLoading(true);
     const toastId = toast.loading(`Submitting transaction...`);
-    // Omitted the rest of the function for brevity, it stays the same
+
+    try {
+        const wallet = new Wallet(walletData.privateKey, provider);
+        const nonce = await provider.getTransactionCount(wallet.address, "pending");
+        let txRequest;
+
+        if (sendToken === "BNB") {
+            txRequest = { to: recipient, value: parseEther(amount), nonce: nonce };
+        } else {
+            const contractAddress = sendToken === "USDT" ? USDT_CONTRACT_ADDRESS : USDC_CONTRACT_ADDRESS;
+            const tokenContract = new Contract(contractAddress, ERC20_ABI, wallet);
+            const decimals = await tokenContract.decimals();
+            const data = tokenContract.interface.encodeFunctionData("transfer", [recipient, parseUnits(amount, decimals)]);
+            txRequest = { to: contractAddress, data: data, nonce: nonce };
+        }
+        
+        const tx = await wallet.sendTransaction(txRequest);
+
+        const pendingTxData = {
+            hash: tx.hash,
+            from: wallet.address.toLowerCase(),
+            to: recipient.toLowerCase(),
+            amount: amount,
+            tokenName: sendToken,
+            timestamp: new Date().toISOString(),
+            nonce: tx.nonce,
+            gasPrice: tx.gasPrice.toString(),
+        };
+
+        setPendingTxs(prev => [pendingTxData, ...prev]);
+        toast.success(<span><b>Transaction Submitted!</b><br/>It is now pending in your history.</span>, { id: toastId, duration: 6000 });
+        
+        setAmount(""); 
+        setRecipient("");
+        setActiveTab('history');
+
+        tx.wait().then(async (receipt) => {
+            console.log('Transaction confirmed:', receipt.hash);
+            toast.success(<span><b>Transaction Confirmed!</b><br/><a href={`https://testnet.bscscan.com/tx/${receipt.hash}`} target="_blank" rel="noopener noreferrer">View on BscScan</a></span>);
+            await logTransaction(receipt.hash);
+            setPendingTxs(prev => prev.filter(p => p.hash !== receipt.hash));
+            fetchAllBalances(wallet.address);
+            fetchHistory();
+        }).catch(err => {
+            console.error("Transaction failed or was dropped:", err);
+            if (err.reason !== 'transaction replaced') {
+              toast.error("Transaction failed. It may have been dropped.");
+            }
+            setPendingTxs(prev => prev.filter(p => p.hash !== tx.hash));
+        });
+
+    } catch (e) {
+        console.error(e);
+        toast.error(e.reason || e.message || "Failed to submit transaction", { id: toastId });
+    } finally {
+        setLoading(false);
+    }
   };
 
-  // Other functions like logTransaction, handleCancel, fetchHistory etc. remain unchanged...
+  const handleCancel = async (txToCancel) => {
+    if (!window.confirm("Are you sure you want to cancel this transaction? This will cost a small gas fee.")) {
+        return;
+    }
+    
+    const toastId = toast.loading("Submitting cancellation...");
+    setLoading(true);
+
+    try {
+        const wallet = new Wallet(walletData.privateKey, provider);
+        const feeData = await provider.getFeeData();
+        const currentGasPrice = feeData.gasPrice;
+        const originalGasPrice = BigInt(txToCancel.gasPrice);
+        const requiredGasPrice = originalGasPrice + (originalGasPrice / 10n);
+        const newGasPrice = (currentGasPrice > requiredGasPrice ? currentGasPrice : requiredGasPrice) + BigInt(parseUnits('1', 'gwei'));
+
+        const cancelTx = await wallet.sendTransaction({ to: wallet.address, value: 0, nonce: txToCancel.nonce, gasPrice: newGasPrice });
+
+        toast.success(<span><b>Cancellation submitted!</b><br/>Waiting for confirmation...</span>, { id: toastId });
+
+        cancelTx.wait().then(receipt => {
+            toast.success("Original transaction successfully cancelled!");
+            setPendingTxs(prev => prev.filter(p => p.nonce !== txToCancel.nonce));
+            fetchAllBalances(wallet.address);
+            fetchHistory();
+        });
+
+    } catch (error) {
+        console.error("Cancellation failed:", error);
+        toast.error(error.reason || "Cancellation failed. The transaction may have already been confirmed.", { id: toastId });
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const fetchHistory = useCallback(async () => {
+    if (!walletData) return;
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/history/${walletData.address}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setHistory(data);
+    } catch (e) {
+      toast.error("Could not load history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [walletData]);
+
+  const fetchContacts = useCallback(async () => {
+    if (!walletData) return;
+    try {
+      const res = await fetch(`${API_URL}/api/contacts/${walletData.address}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setContacts(data);
+    } catch (e) {
+      toast.error("Could not load contacts.");
+    }
+  }, [walletData]);
+
+  const handleAddContact = async () => {
+    if (!newContactName.trim() || !isAddress(newContactAddress)) return toast.error("Please enter a valid name and address.");
+    const payload = { walletAddress: walletData.address, contactName: newContactName, contactAddress: newContactAddress };
+    try {
+        const res = await fetch(`${API_URL}/api/contacts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to add contact');
+        toast.success("Contact added!");
+        setNewContactName(""); setNewContactAddress("");
+        fetchContacts();
+    } catch (e) {
+        toast.error(e.message);
+    }
+  };
+
+  const handleDeleteContact = async (contactId) => {
+    if (!window.confirm("Are you sure you want to delete this contact?")) return;
+    try {
+        const res = await fetch(`${API_URL}/api/contacts/${contactId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete contact');
+        toast.success("Contact deleted.");
+        fetchContacts();
+    } catch (e) {
+        toast.error(e.message);
+    }
+  };
+
+  useEffect(() => {
+    const estimateFee = async () => {
+      if (!walletData || !isAddress(recipient) || !amount || parseFloat(amount) <= 0) {
+        setEstimatedFee(null);
+        return;
+      }
+      setFeeLoading(true);
+      try {
+        const feeData = await provider.getFeeData();
+        const gasPrice = feeData.gasPrice;
+        let gasLimit;
+        if (sendToken === "BNB") {
+            gasLimit = await provider.estimateGas({ to: recipient, value: parseEther(amount) });
+        } else {
+            const contractAddress = sendToken === "USDT" ? USDT_CONTRACT_ADDRESS : USDC_CONTRACT_ADDRESS;
+            const tokenInterface = new Interface(ERC20_ABI);
+            const tokenContract = new Contract(contractAddress, ERC20_ABI, provider);
+            const decimals = await tokenContract.decimals();
+            const data = tokenInterface.encodeFunctionData("transfer", [recipient, parseUnits(amount, decimals)]);
+            gasLimit = await provider.estimateGas({ to: contractAddress, from: walletData.address, data });
+        }
+        setEstimatedFee(formatEther(gasPrice * gasLimit));
+      } catch (error) {
+        setEstimatedFee(null);
+      } finally {
+        setFeeLoading(false);
+      }
+    };
+    const debounce = setTimeout(() => { estimateFee() }, 500);
+    return () => clearTimeout(debounce);
+  }, [amount, recipient, sendToken, provider, walletData]);
+
+  useEffect(() => {
+    if (walletData) {
+        if (activeTab === "history") fetchHistory();
+        if (activeTab === "contacts") fetchContacts();
+    }
+  }, [activeTab, walletData, fetchHistory, fetchContacts]);
 
   if (!walletData) {
     const getTitle = () => {
@@ -195,13 +384,11 @@ export default function App() {
       if (mode === 'reset') return "Reset Your Password";
       return "Access Your Wallet";
     };
-
     const getButtonText = () => {
       if (mode === 'create') return "Create & Secure Wallet";
       if (mode === 'reset') return "Reset Password";
       return "Access My Wallet";
     };
-
     const mainAction = mode === 'reset' ? handlePasswordReset : handleSubmit;
 
     return (
@@ -210,26 +397,21 @@ export default function App() {
             <div className="login-box">
                 <h1 className="title">🦊 CryptoNest</h1>
                 <p className="subtitle">{getTitle()}</p>
-                
                 {mode !== 'reset' && (
                   <div className="pill-toggle">
                       <span className={clsx({ active: mode === "create" })} onClick={() => setMode("create")}>Create Wallet</span>
                       <span className={clsx({ active: mode === "fetch" })} onClick={() => setMode("fetch")}>Access Wallet</span>
                   </div>
                 )}
-
                 <div className="input-group">
                     <input placeholder="Wallet Name" value={walletName} onChange={(e) => setWalletName(e.target.value)} />
                     {mode === 'reset' && <textarea className="mnemonic-input" placeholder="Enter your 12-word Mnemonic Phrase..." value={mnemonicInput} onChange={(e) => setMnemonicInput(e.target.value)} rows={3}/>}
                     <input type="password" placeholder={mode === 'reset' ? 'Enter New Password' : 'Password'} value={password} onChange={(e) => setPassword(e.target.value)}/>
                     {(mode === "create" || mode === 'reset') && <input type="password" placeholder={mode === 'reset' ? 'Confirm New Password' : 'Confirm Password'} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}/>}
                 </div>
-
-                {/* UPDATED: Button now shows spinner when loading */}
                 <button className="btn btn-primary" onClick={mainAction} disabled={loading}>
                     {loading ? <LoadingSpinner /> : getButtonText()}
                 </button>
-
                 <div className="login-footer-links">
                   {mode === 'fetch' && <a href="#" onClick={(e) => { e.preventDefault(); setMode('reset'); }}>Forgot Password?</a>}
                   {mode === 'reset' && <a href="#" onClick={(e) => { e.preventDefault(); setMode('fetch'); }}>Back to Login</a>}
@@ -247,7 +429,7 @@ export default function App() {
         
         <header className="app-header">
             <h1 className="title-small">🦊 CryptoNest</h1>
-            <button className="btn btn-secondary" onClick={() => { setWalletData(null); setPassword('')}}>Lock Wallet</button>
+            <button className="btn btn-secondary" style={{width: 'auto'}} onClick={() => { setWalletData(null); setPassword('')}}>Lock Wallet</button>
         </header>
         
         <main className="app-main">
@@ -277,9 +459,28 @@ export default function App() {
                 <div className="tab-content">
                     {activeTab === 'send' && (
                         <Card>
-                            {/* Form remains the same */}
-                            {/* UPDATED: Send button now uses the spinner */}
-                            <button className="btn btn-primary" onClick={handleSend} disabled={loading}>
+                            <div className="input-group">
+                                <label>Recipient Address</label>
+                                <div className="address-input-wrapper">
+                                    <input placeholder="0x..." value={recipient} onChange={(e) => setRecipient(e.target.value)} />
+                                    <button className="btn-address-book" onClick={() => { if(contacts.length === 0) fetchContacts(); setContactModalOpen(true); }}>👥</button>
+                                </div>
+                            </div>
+                            <div className="input-group-row">
+                                <div className="input-group">
+                                    <label>Amount</label>
+                                    <input placeholder="0.0" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                                </div>
+                                <div className="input-group">
+                                    <label>Token</label>
+                                    <select value={sendToken} onChange={(e) => setSendToken(e.target.value)}>
+                                        <option value="BNB">BNB</option>
+                                        <option value="USDT">USDT</option>
+                                        <option value="USDC">USDC</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button className="btn btn-primary" onClick={handleSend} disabled={loading || !recipient || !amount}>
                                 {loading ? <LoadingSpinner /> : `Send ${sendToken}`}
                             </button>
                             <div className="fee-display">
@@ -291,19 +492,59 @@ export default function App() {
 
                     {activeTab === 'history' && (
                        <Card>
-                         {/* UPDATED: History now uses the spinner */}
                          {(historyLoading && displayedHistory.length === 0) ? <LoadingSpinner /> : (
                            <ul className="history-list">
-                            {/* ... mapping logic ... */}
+                             {displayedHistory.length > 0 ? displayedHistory.map(tx => {
+                                const isSent = tx.from.toLowerCase() === walletData.address.toLowerCase();
+                                const txDate = new Date(tx.timestamp);
+                                const isPending = tx.status === 'Pending';
+                                const isFailed = tx.status === 'Failed';
+                                
+                                return (
+                                  <li key={tx.hash} className={clsx({ 'tx-status-pending': isPending, 'tx-status-failed': isFailed })}>
+                                    <div className="tx-icon-and-details">
+                                        <div className={clsx('tx-direction', {sent: isSent, received: !isSent})}>{isSent ? '↗' : '↙'}</div>
+                                        <div className="tx-details">
+                                            <p><strong>{isSent ? `Send ${tx.tokenName}` : `Receive ${tx.tokenName}`}</strong></p>
+                                            {isPending ? <p className="status-text pending">Pending</p> : <p className="tx-sub-details">{`${txDate.toLocaleDateString()} at ${txDate.toLocaleTimeString()}`}</p>}
+                                        </div>
+                                    </div>
+                                    <div className="tx-amount-and-actions">
+                                        <p className="tx-amount">{`${isSent ? '-' : '+'} ${parseFloat(tx.amount).toFixed(4)} ${tx.tokenName}`}</p>
+                                        {isPending ? <button className="btn-cancel" onClick={() => handleCancel(tx)} disabled={loading}>Cancel</button> : <a href={`https://testnet.bscscan.com/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="tx-link">View</a>}
+                                    </div>
+                                  </li>
+                                )
+                             }) : <p>No transactions found. Send one to see it here.</p>}
                            </ul>
                          )}
                        </Card>
                     )}
 
-                    {/* Contacts and Security tabs remain functionally the same */}
+                    {activeTab === 'contacts' && (
+                        <Card title="Address Book">
+                            <div className="add-contact-form">
+                                <h4>Add New Contact</h4>
+                                <div className="input-group"><input placeholder="Contact Name" value={newContactName} onChange={(e) => setNewContactName(e.target.value)} /></div>
+                                <div className="input-group"><input placeholder="Contact Address (0x...)" value={newContactAddress} onChange={(e) => setNewContactAddress(e.target.value)} /></div>
+                                <button className="btn btn-secondary" onClick={handleAddContact}>Save Contact</button>
+                            </div>
+                            <div className="contacts-list">
+                                <h4>Saved Contacts</h4>
+                                {contacts.length > 0 ? (
+                                    <ul>{contacts.map(contact => (<li key={contact._id}><div className="contact-info"><strong>{contact.contactName}</strong><span>{contact.contactAddress}</span></div><button className="btn-delete" onClick={() => handleDeleteContact(contact._id)}>🗑️</button></li>))}</ul>
+                                ) : <p>You have no saved contacts.</p>}
+                            </div>
+                        </Card>
+                    )}
+
                     {activeTab === 'security' && (
                         <Card title="Reveal Private key & Mnemonic">
-                            {/* ... content ... */}
+                            <p className="warning-text">Only do this if you know what you are doing. Never share these with anyone.</p>
+                            <div className="input-group">
+                                <label>Enter Your Wallet Password</label>
+                                <input type="password" placeholder="********" value={revealInput} onChange={(e) => setRevealInput(e.target.value)} />
+                            </div>
                             <button
                               className="btn btn-danger"
                               onClick={() => {
@@ -314,7 +555,12 @@ export default function App() {
                             >
                                 {showSensitive ? "Hide Secrets" : "Reveal Secrets"}
                             </button>
-                            {/* ... content ... */}
+                            {showSensitive && (
+                                <div className="secrets-box">
+                                    <div className="input-group"><label>Private Key</label><textarea readOnly value={walletData.privateKey} rows={2} /></div>
+                                    <div className="input-group"><label>Mnemonic Phrase</label><textarea readOnly value={walletData.mnemonic} rows={3} /></div>
+                                </div>
+                            )}
                         </Card>
                     )}
                 </div>
