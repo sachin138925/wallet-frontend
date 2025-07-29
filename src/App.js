@@ -126,12 +126,18 @@ export default function App() {
         const wallet = Wallet.createRandom();
         const payload = { name: walletName, address: wallet.address, privateKey: wallet.privateKey, mnemonic: wallet.mnemonic.phrase, password };
         const res = await fetch(`${API_URL}/api/wallet`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+
+        // START of CHANGE
         if (res.ok) {
           toast.success("Wallet created & saved!");
           setWalletName(""); setPassword(""); setConfirmPw("");
         } else {
-          toast.error((await res.json()).error || "Save failed");
+          // This will now handle the "Wallet name already exists" error
+          const errorData = await res.json();
+          toast.error(errorData.error || "Save failed");
         }
+        // END of CHANGE
+
       } else {
         const res = await fetch(`${API_URL}/api/wallet/${walletName}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
         const data = await res.json();
