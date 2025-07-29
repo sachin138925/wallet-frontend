@@ -155,9 +155,6 @@ export default function App() {
     }
   };
 
-  // ==================================================================
-  // ========= NEW HANDLER FOR PASSWORD RESET =========================
-  // ==================================================================
   const handlePasswordReset = async () => {
     if (!walletName.trim() || !mnemonicInput.trim() || !password.trim()) {
       return toast.error("Please fill all fields.");
@@ -205,7 +202,6 @@ export default function App() {
     }
   };
 
-  // --- handleSend function remains the same ---
   const handleSend = async () => {
     if (!walletData) return toast.error("Load wallet first.");
     if (!isAddress(recipient)) return toast.error("Invalid recipient address.");
@@ -272,7 +268,6 @@ export default function App() {
     }
   };
 
-  // --- other functions (handleCancel, fetchHistory, etc.) remain the same ---
   const handleCancel = async (txToCancel) => {
     if (!window.confirm("Are you sure you want to cancel this transaction? This will cost a small gas fee.")) {
         return;
@@ -408,9 +403,6 @@ export default function App() {
     }
   }, [activeTab, walletData, fetchHistory, fetchContacts]);
 
-  // ==================================================================
-  // ========= UPDATED PRE-LOGIN VIEW =================================
-  // ==================================================================
   if (!walletData) {
     const getTitle = () => {
       if (mode === 'create') return "Create a New Wallet";
@@ -434,7 +426,6 @@ export default function App() {
                 <h1 className="title">🦊 CryptoNest</h1>
                 <p className="subtitle">{getTitle()}</p>
                 
-                {/* Hide the Create/Access toggle when in reset mode */}
                 {mode !== 'reset' && (
                   <div className="pill-toggle">
                       <span className={clsx({ active: mode === "create" })} onClick={() => setMode("create")}>Create Wallet</span>
@@ -445,7 +436,6 @@ export default function App() {
                 <div className="input-group">
                     <input placeholder="Wallet Name" value={walletName} onChange={(e) => setWalletName(e.target.value)} />
 
-                    {/* Show Mnemonic field only in reset mode */}
                     {mode === 'reset' && (
                       <textarea
                         className="mnemonic-input"
@@ -456,7 +446,6 @@ export default function App() {
                       />
                     )}
 
-                    {/* The password input serves different purposes based on the mode */}
                     <input
                       type="password"
                       placeholder={mode === 'reset' ? 'Enter New Password' : 'Password'}
@@ -464,7 +453,6 @@ export default function App() {
                       onChange={(e) => setPassword(e.target.value)}
                     />
                     
-                    {/* Show confirm password for create and reset modes */}
                     {(mode === "create" || mode === 'reset') && (
                       <input
                         type="password"
@@ -479,7 +467,6 @@ export default function App() {
                     {getButtonText()}
                 </button>
 
-                {/* Show different links based on the current mode */}
                 <div className="login-footer-links">
                   {mode === 'fetch' && (
                     <a href="#" onClick={(e) => { e.preventDefault(); setMode('reset'); }}>Forgot Password?</a>
@@ -493,7 +480,6 @@ export default function App() {
     );
   }
 
-  // --- Logged-in view remains the same ---
   return (
     <div className="app-logged-in">
         <Toaster position="top-center" toastOptions={{ className: 'toast-custom' }}/>
@@ -647,7 +633,21 @@ export default function App() {
                                 <label>Enter Your Wallet Password</label>
                                 <input type="password" placeholder="********" value={revealInput} onChange={(e) => setRevealInput(e.target.value)} />
                             </div>
-                            <button className="btn btn-danger" onClick={() => { if(revealInput === password) setShowSensitive(p => !p); else toast.error("Incorrect password!") }}>
+                            {/* ================================================================== */}
+                            {/* ========= THE CHANGE IS IN THIS onClick HANDLER ================== */}
+                            {/* ================================================================== */}
+                            <button
+                              className="btn btn-danger"
+                              onClick={() => {
+                                if (revealInput === password) {
+                                  setShowSensitive(p => !p);
+                                } else if (revealInput) { // Only show error if input is not empty
+                                  toast.error("Incorrect password!");
+                                }
+                                // ALWAYS clear the input field after the button is clicked
+                                setRevealInput("");
+                              }}
+                            >
                                 {showSensitive ? "Hide Secrets" : "Reveal Secrets"}
                             </button>
                             {showSensitive && (
