@@ -64,7 +64,6 @@ const ContactsModal = ({ contacts, onSelect, onClose }) => (
 
 // --- MAIN APP ---
 export default function App() {
-  // Mode can now be 'create', 'fetch', or 'reset'
   const [mode, setMode] = useState("fetch");
   const [walletName, setWalletName] = useState("");
   const [password, setPassword] = useState("");
@@ -85,16 +84,13 @@ export default function App() {
   const [revealInput, setRevealInput] = useState("");
   const [showSensitive, setShowSensitive] = useState(false);
   
-  // New state for the mnemonic phrase input during password reset
   const [mnemonicInput, setMnemonicInput] = useState("");
 
-  // Contacts feature state
   const [contacts, setContacts] = useState([]);
   const [newContactName, setNewContactName] = useState("");
   const [newContactAddress, setNewContactAddress] = useState("");
   const [isContactModalOpen, setContactModalOpen] = useState(false);
 
-  // Gas Fee Estimation state
   const [estimatedFee, setEstimatedFee] = useState(null);
   const [isFeeLoading, setFeeLoading] = useState(false);
   
@@ -137,7 +133,7 @@ export default function App() {
           const errorData = await res.json();
           toast.error(errorData.error || "Save failed");
         }
-      } else { // This is 'fetch' mode
+      } else { // 'fetch' mode
         const res = await fetch(`${API_URL}/api/wallet/${walletName}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
         const data = await res.json();
         if (data.error) {
@@ -178,7 +174,6 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         toast.success(data.message);
-        // Reset form and switch back to login mode
         setMode("fetch");
         setWalletName("");
         setMnemonicInput("");
@@ -281,7 +276,7 @@ export default function App() {
         const feeData = await provider.getFeeData();
         const currentGasPrice = feeData.gasPrice;
         const originalGasPrice = BigInt(txToCancel.gasPrice);
-        const requiredGasPrice = originalGasPrice + (originalGasPrice / 10n); // 10% more
+        const requiredGasPrice = originalGasPrice + (originalGasPrice / 10n);
         const newGasPrice = (currentGasPrice > requiredGasPrice ? currentGasPrice : requiredGasPrice) + BigInt(parseUnits('1', 'gwei'));
 
         const cancelTx = await wallet.sendTransaction({
@@ -307,7 +302,6 @@ export default function App() {
         setLoading(false);
     }
   };
-
 
   const fetchHistory = useCallback(async () => {
     if (!walletData) return;
@@ -634,17 +628,23 @@ export default function App() {
                                 <input type="password" placeholder="********" value={revealInput} onChange={(e) => setRevealInput(e.target.value)} />
                             </div>
                             {/* ================================================================== */}
-                            {/* ========= THE CHANGE IS IN THIS onClick HANDLER ================== */}
+                            {/* ========= CORRECTED onClick HANDLER LOGIC ======================== */}
                             {/* ================================================================== */}
                             <button
                               className="btn btn-danger"
                               onClick={() => {
-                                if (revealInput === password) {
-                                  setShowSensitive(p => !p);
-                                } else if (revealInput) { // Only show error if input is not empty
-                                  toast.error("Incorrect password!");
+                                // If secrets are already shown, just hide them. No password needed.
+                                if (showSensitive) {
+                                  setShowSensitive(false);
+                                } else {
+                                  // Otherwise, if secrets are hidden, check the password to reveal them.
+                                  if (revealInput === password) {
+                                    setShowSensitive(true); // Reveal
+                                  } else if (revealInput) { // Only show error if user typed something
+                                    toast.error("Incorrect password!");
+                                  }
                                 }
-                                // ALWAYS clear the input field after the button is clicked
+                                // ALWAYS clear the input field after any action.
                                 setRevealInput("");
                               }}
                             >
